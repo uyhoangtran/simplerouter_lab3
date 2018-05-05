@@ -24,11 +24,11 @@
 #include "sr_utils.h"
 
 #include "arp.h"
+#include "ip.h"
 
 #define ETH_HDR_SIZE sizeof(sr_ethernet_hdr_t)
-#define IP_HDR_SIZE sizeof(sr_ip_hdr_t)
 
-static int _verify_packet( uint8_t *eth_packet, unsigned int len)
+static int ip_verify_packet( uint8_t *eth_packet, unsigned int len)
 { 
   sr_ip_hdr_t *ip_hdr;
   uint16_t hdr_sum;
@@ -52,8 +52,6 @@ static int _verify_packet( uint8_t *eth_packet, unsigned int len)
     Debug("IP packet is invalid: wrong header checksum hdr_sum=%d; my_sum=%d\n",hdr_sum,sum);
     return -1;
   }
-
-  Debug("Checksum sucess: hdr_sum=%d; my_sum=%d \n",hdr_sum,sum);
   return 0;
 }
 
@@ -61,7 +59,7 @@ static uint32_t _destination_ip(uint8_t *ip_packet)
 {
   sr_ip_hdr_t *ip_hdr;
   ip_hdr = (sr_ip_hdr_t *)ip_packet;
-  return ntohs(ip_hdr->ip_dst);
+  return ntohl(ip_hdr->ip_dst);
 }
 
 void arp_request_handler(struct sr_instance* sr,
@@ -78,7 +76,6 @@ void arp_request_handler(struct sr_instance* sr,
 
   if ((arp_hdr->ar_tip) == if_struct->ip)
   {
-    Debug("It's me\n");
     sr_arpcache_insert(&sr->cache,if_struct->addr,if_struct->ip);
   }
 
@@ -86,7 +83,6 @@ void arp_request_handler(struct sr_instance* sr,
 
   if (arp_entry)
   {
-    Debug("have entry \n");
     uint8_t* buffer;
     buffer = calloc((ETH_HDR_SIZE + ARP_HDR_SIZE),1);
     create_arp_reply_packet(sr, buffer, arp_entry, arp_src_ip(packet + ETH_HDR_SIZE),\
@@ -110,17 +106,23 @@ void arp_reply_handler(struct sr_instance* sr,
 {
   struct sr_arpreq *sr_arpreq;
   struct sr_packet *sr_packet;
+  struct sr_if *if_struct;
   uint32_t ip;
   uint8_t mac[ETHER_ADDR_LEN];
+  sr_ethernet_hdr_t *eth_hdr;
   ip = arp_src_ip(packet + ETH_HDR_SIZE);
   memcpy(mac,arp_src_addr(packet + ETH_HDR_SIZE),ETHER_ADDR_LEN);
   sr_arpreq = sr_arpcache_insert(&sr->cache,mac,ip);
-
   if (sr_arpreq)
   {
     sr_packet = sr_arpreq->packets;
     while (NULL != sr_packet)
     {
+      eth_hdr = (sr_ethernet_hdr_t *)(sr_packet->buf);
+      struct sr_if *if_struct = sr_get_interface(sr, interface);
+    /* memcpy(eth_hdr->ether_shost,if_struct->addr,ETHER_ADDR_LEN); */
+      memcpy(eth_hdr->ether_dhost,mac,ETHER_ADDR_LEN);
+    /* eth_hdr->ether_type = htons(0x0800); */
       sr_send_packet(sr,sr_packet->buf,sr_packet->len,sr_packet->iface);
       sr_packet = sr_packet->next;
     }
@@ -139,7 +141,6 @@ void sr_init(struct sr_instance* sr)
 {
     /* REQUIRES */
     assert(sr);
-    struct sr_if* if_walker = 0;
     /* Initialize cache and cache cleanup thread */
     sr_arpcache_init(&(sr->cache));
 
@@ -193,15 +194,39 @@ void sr_handlepacket(struct sr_instance* sr,
   /* fill in code here */
 
   uint16_t ether_type;
-  ether_type = ethertype(packet);
-
+  ether_type = ethertype(packet);  
   switch (ether_type)
   {
     case ethertype_ip:
     {
       Debug("Received IP packet \n");
-      _verify_packet(packet,len);
-      _destination_ip(packet + ETH_HDR_SIZE);
+
+      uint32_t my_ip;
+      sr_ip_hdr_t *ip_hdr;
+      struct sr_if* my_if;
+
+      ip_verify_packet(packet,len);
+      ip_hdr = (sr_ip_hdr_t *)(packet + ETH_HDR_SIZE);
+      
+      my_if = sr_get_interface(sr, interface);
+      my_ip = my_if->ip;
+      if(ip_hdr->ip_dst == my_ip)
+      {
+        Debug("Packet is for me\n");
+        if(ip_hdr->ip_p == 0x01)
+        {
+          Debug("Packet is ICMP\n");
+          icmp_handler(sr,packet,len,interface);
+        }
+        else
+        {
+        
+        }
+      }
+      else
+      {
+        Debug("Packet is not for me %x %x\n",my_ip,ntohl(ip_hdr->ip_dst));
+      }
       break;
     }
     case ethertype_arp:

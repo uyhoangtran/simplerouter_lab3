@@ -1,6 +1,5 @@
 #include "arp.h"
 #define ETH_HDR_SIZE sizeof(sr_ethernet_hdr_t)
-#define IP_HDR_SIZE sizeof(sr_ip_hdr_t)
 
 unsigned char bc_addr[ETHER_ADDR_LEN]={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
@@ -13,7 +12,7 @@ unsigned short arp_opcode(uint8_t *arp_packet)
 uint32_t arp_dest_ip(uint8_t *arp_packet)
 {
   sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)arp_packet;
-  return (arp_hdr->ar_tip);
+  return ntohl(arp_hdr->ar_tip);
 }
 
 unsigned char *arp_dest_addr(uint8_t *arp_packet)
@@ -25,7 +24,7 @@ unsigned char *arp_dest_addr(uint8_t *arp_packet)
 uint32_t arp_src_ip(uint8_t *arp_packet)
 {
   sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)arp_packet;
-  return (arp_hdr->ar_sip);
+  return ntohl(arp_hdr->ar_sip);
 }
 
 unsigned char *arp_src_addr(uint8_t *arp_packet)
@@ -55,9 +54,9 @@ void create_arp_reply_packet(struct sr_instance* sr, uint8_t *buffer,
     arp_hdr->ar_pln = 4;
     arp_hdr->ar_op = htons(arp_op_reply);
     memcpy(arp_hdr->ar_sha, arp_entry->mac, ETHER_ADDR_LEN);
-    arp_hdr->ar_sip = (arp_entry->ip);
+    arp_hdr->ar_sip = arp_entry->ip;     /* IP in ARP_ENTRY is already in network byte order */
     memcpy(arp_hdr->ar_tha, dest_addr, ETHER_ADDR_LEN);
-    arp_hdr->ar_tip = (dest_ip);
+    arp_hdr->ar_tip = htonl(dest_ip);
 }
 
 extern void create_arp_request_packet(struct sr_instance* sr, uint8_t *buffer, 
@@ -80,7 +79,7 @@ extern void create_arp_request_packet(struct sr_instance* sr, uint8_t *buffer,
     arp_hdr->ar_pln = 4;
     arp_hdr->ar_op = htons(arp_op_request);
     memcpy(arp_hdr->ar_sha, if_struct->addr, ETHER_ADDR_LEN);
-    arp_hdr->ar_sip = htonl(if_struct->ip);
+    arp_hdr->ar_sip = (if_struct->ip);
     memcpy(arp_hdr->ar_tha, bc_addr, ETHER_ADDR_LEN);
     arp_hdr->ar_tip = htonl(sr_arpreq->ip);
 }
