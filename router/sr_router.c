@@ -226,6 +226,7 @@ void sr_handlepacket(struct sr_instance* sr,
       else
       {
         Debug("Packet is not for me %x %x\n",my_ip,ntohl(ip_hdr->ip_dst));
+        forwarding_packet(sr,packet,len,interface);
       }
       break;
     }

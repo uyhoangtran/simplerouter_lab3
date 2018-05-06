@@ -1,4 +1,6 @@
 #include "arp.h"
+#include "ip.h"
+
 #define ETH_HDR_SIZE sizeof(sr_ethernet_hdr_t)
 
 unsigned char bc_addr[ETHER_ADDR_LEN]={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
@@ -100,7 +102,7 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *sr_arpreq)
 {
     time_t now;
     uint8_t *buffer;
-    struct sr_if* if_walker = 0;
+    struct sr_rt* rt;
 
     now = time(NULL);
     if (difftime(now, sr_arpreq->sent) >= 1.0)
@@ -111,20 +113,18 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *sr_arpreq)
         }
         else
         {
-            buffer = calloc(ETH_HDR_SIZE + ARP_HDR_SIZE, 1);
-            if_walker = sr->if_list;
-
-            while(NULL != if_walker)
+            rt = sr_get_longest_prefix(sr->routing_table,htonl(sr_arpreq->ip));
+            if (NULL != rt)
             {
+                buffer = calloc(ETH_HDR_SIZE + ARP_HDR_SIZE, 1);
                 memset(buffer, 0, ETH_HDR_SIZE + ARP_HDR_SIZE);
-                create_arp_request_packet(sr, buffer,sr_arpreq,if_walker->name);
-                sr_send_packet(sr, buffer, ETH_HDR_SIZE + ARP_HDR_SIZE, if_walker->name);
+                create_arp_request_packet(sr, buffer,sr_arpreq,rt->interface);
+                sr_send_packet(sr, buffer, ETH_HDR_SIZE + ARP_HDR_SIZE, rt->interface);
 
-                if_walker = if_walker->next;
+                free(buffer);
+                sr_arpreq->sent = now;
+                sr_arpreq->times_sent++;
             }
-            free(buffer);
-            sr_arpreq->sent = now;
-            sr_arpreq->times_sent++;
         }
     }
 }
