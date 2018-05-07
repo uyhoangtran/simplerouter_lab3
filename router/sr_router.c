@@ -52,7 +52,20 @@ static int ip_verify_packet( uint8_t *eth_packet, unsigned int len)
     Debug("IP packet is invalid: wrong header checksum hdr_sum=%d; my_sum=%d\n",hdr_sum,sum);
     return -1;
   }
+  ip_hdr->ip_sum = sum;
   return 0;
+}
+
+struct sr_packet *destroy_sent_packet(struct sr_arpreq *sr_arpreq)
+{
+  struct sr_packet *next_pkt;
+  next_pkt = sr_arpreq->packets->next;
+
+  free(sr_arpreq->packets->buf);
+  free(sr_arpreq->packets);
+
+  sr_arpreq->packets = next_pkt;
+  return next_pkt;
 }
 
 static uint32_t _destination_ip(uint8_t *ip_packet)
@@ -124,7 +137,7 @@ void arp_reply_handler(struct sr_instance* sr,
       memcpy(eth_hdr->ether_dhost,mac,ETHER_ADDR_LEN);
     /* eth_hdr->ether_type = htons(0x0800); */
       sr_send_packet(sr,sr_packet->buf,sr_packet->len,sr_packet->iface);
-      sr_packet = sr_packet->next;
+      sr_packet = destroy_sent_packet(sr_arpreq);
     }
     sr_arpreq_destroy(&sr->cache, sr_arpreq);
   }
