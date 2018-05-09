@@ -3,16 +3,31 @@
 
 #define ETH_HDR_SIZE sizeof(sr_ethernet_hdr_t)
 
+uint32_t fbc(uint32_t data)
+{
+        data = (data & 0x55555555) + ((data >> 1) & 0x55555555);
+        data = (data & 0x33333333) + ((data >> 2) & 0x33333333);
+        data = (data & 0x0F0F0F0F) + ((data >> 4) & 0x0F0F0F0F);
+        data = (data & 0x00FF00FF) + ((data >> 8) & 0x00FF00FF);
+        data = (data & 0x0000FFFF) + ((data >> 16) & 0x0000FFFF);
+        return data;
+}
+
 struct sr_rt* sr_get_longest_prefix(struct sr_rt* rt, uint32_t ip)
 {
-    Debug("longest pre ip: %x",ip);
+    Debug("longest pre ip: %d\n",ip);
     struct sr_rt* rt_walker = rt;
+    uint32_t longest_mask = 0;
     struct sr_rt* rt_match = NULL;
     while(NULL != rt_walker)
     {
         if ( (ip&(rt_walker->mask.s_addr)) == rt_walker->dest.s_addr )
         {
-            rt_match = rt_walker;
+            if (fbc(rt_walker->mask.s_addr) > fbc(longest_mask))
+            {
+                rt_match = rt_walker;
+                longest_mask = rt_walker->mask.s_addr;
+            }
         }
         rt_walker = rt_walker->next;
     }
@@ -52,6 +67,25 @@ void send_ip_packet(struct sr_instance* sr, uint8_t * packet, unsigned int len, 
 
 }
 
+void make_ip_hdr(struct sr_instance* sr, uint8_t *buffer, unsigned int len, char* interface,uint32_t dst_ip, uint8_t ip_p)
+{
+    sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)buffer;
+    struct sr_if* my_if = sr_get_interface(sr,interface);
+
+    ip_hdr->ip_hl = 5;
+    ip_hdr->ip_v = 4;
+    ip_hdr->ip_tos = 0;
+    ip_hdr->ip_id = 0;
+    ip_hdr->ip_off = 0;
+    ip_hdr->ip_ttl = 64;
+    ip_hdr->ip_dst = htonl(dst_ip);
+    ip_hdr->ip_src = my_if->ip;
+    ip_hdr->ip_p = ip_p;
+    ip_hdr->ip_len = htons(len);
+    ip_hdr->ip_sum = 0;
+    ip_hdr->ip_sum = cksum((uint8_t *)ip_hdr, IP_HDR_SIZE);
+}
+
 void make_icmp_packet(struct sr_instance* sr, uint8_t *buffer, unsigned int len, char* interface,uint8_t type, uint8_t code, uint8_t *data)
 {
     sr_icmp_hdr_t *icmp_hdr = (sr_icmp_hdr_t *)buffer;
@@ -67,6 +101,18 @@ void make_icmp_packet(struct sr_instance* sr, uint8_t *buffer, unsigned int len,
             break;
         }
         case 3:
+        {
+            sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)buffer;
+            sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)data;
+            icmp_t3_hdr->unused = 0;
+            icmp_t3_hdr->next_mtu = 0;
+            
+            ip_hdr->ip_sum = 0;
+            ip_hdr->ip_sum = cksum((uint8_t *)ip_hdr, IP_HDR_SIZE);
+            memcpy(icmp_t3_hdr->data, data, ICMP_DATA_SIZE);
+            break;
+        }
+        case 11:
         {
             sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)buffer;
             sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)data;
@@ -128,12 +174,18 @@ void forwarding_packet(struct sr_instance* sr, uint8_t * packet, unsigned int le
     ip_hdr->ip_ttl--;
     if (ip_hdr->ip_ttl == 0)
     {
+        send_pkt = malloc(IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t));
+        make_ip_hdr(sr,send_pkt,IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t),interface,ntohl(ip_hdr->ip_src),ip_protocol_icmp);
+        make_icmp_packet(sr,send_pkt + IP_HDR_SIZE, sizeof(sr_icmp_t3_hdr_t),interface,11, 0, packet + ETH_HDR_SIZE);
+        send_ip_packet(sr,send_pkt, IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t),interface,ntohl(ip_hdr->ip_src));
+        free(send_pkt);
         return;
     }
 
     rt_entry = sr_get_longest_prefix(sr->routing_table,(ip_hdr->ip_dst));
     if (NULL != rt_entry)
     {
+        ip_hdr->ip_sum = 0;
         ip_hdr->ip_sum = cksum(ip_hdr, IP_HDR_SIZE);
 
         send_pkt = malloc(len - ETH_HDR_SIZE);
@@ -144,21 +196,24 @@ void forwarding_packet(struct sr_instance* sr, uint8_t * packet, unsigned int le
     {
         Debug("Destination unreachable\n");
         send_pkt = malloc(IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t));
-        memcpy(send_pkt,(uint8_t *)ip_hdr,IP_HDR_SIZE);
-        sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)send_pkt;
-        struct sr_if* my_if = sr_get_interface(sr,interface);
-
-        ip_hdr->ip_ttl = 64;
-        ip_hdr->ip_dst = ip_hdr->ip_src;
-        ip_hdr->ip_src = my_if->ip;
-        ip_hdr->ip_p = ip_protocol_icmp;
-        ip_hdr->ip_len = htons(IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t));
-        ip_hdr->ip_sum = 0;
-        ip_hdr->ip_sum = cksum((uint8_t *)ip_hdr, IP_HDR_SIZE);
-
+        make_ip_hdr(sr,send_pkt,IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t),interface,ntohl(ip_hdr->ip_src),ip_protocol_icmp);
         make_icmp_packet(sr,send_pkt + IP_HDR_SIZE, sizeof(sr_icmp_t3_hdr_t),interface,3, 0, packet + ETH_HDR_SIZE);
-        send_ip_packet(sr,send_pkt, IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t),interface,ntohl(ip_hdr->ip_dst));
+        send_ip_packet(sr,send_pkt, IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t),interface,ntohl(ip_hdr->ip_src));
+        Debug("sent icmp unreachable\n");
     }
+
+    free(send_pkt);
+}
+
+void tcp_udp_handler(struct sr_instance* sr, uint8_t * packet, unsigned int len, char* interface)
+{
+    sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)packet;
+    uint8_t *send_pkt;
+
+    send_pkt = malloc(IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t));
+    make_ip_hdr(sr,send_pkt,IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t),interface,ntohl(ip_hdr->ip_src),ip_protocol_icmp);
+    make_icmp_packet(sr,send_pkt + IP_HDR_SIZE, sizeof(sr_icmp_t3_hdr_t),interface,3, 3, packet + ETH_HDR_SIZE);
+    send_ip_packet(sr,send_pkt, IP_HDR_SIZE + sizeof(sr_icmp_t3_hdr_t),interface,ntohl(ip_hdr->ip_src));
 
     free(send_pkt);
 }

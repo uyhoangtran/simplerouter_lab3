@@ -15,5 +15,7 @@
 #define ICMP_HDR_SIZE sizeof(sr_icmp_hdr_t)
 
 extern void icmp_handler(struct sr_instance* sr, uint8_t * packet, unsigned int len, char* interface);
+extern void tcp_udp_handler(struct sr_instance* sr, uint8_t * packet, unsigned int len, char* interface);
+
 extern struct sr_rt* sr_get_longest_prefix(struct sr_rt* rt, uint32_t ip);
 extern void forwarding_packet(struct sr_instance* sr, uint8_t * packet, unsigned int len, char* interface);

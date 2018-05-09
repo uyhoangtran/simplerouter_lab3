@@ -133,9 +133,7 @@ void arp_reply_handler(struct sr_instance* sr,
     {
       eth_hdr = (sr_ethernet_hdr_t *)(sr_packet->buf);
       struct sr_if *if_struct = sr_get_interface(sr, interface);
-    /* memcpy(eth_hdr->ether_shost,if_struct->addr,ETHER_ADDR_LEN); */
       memcpy(eth_hdr->ether_dhost,mac,ETHER_ADDR_LEN);
-    /* eth_hdr->ether_type = htons(0x0800); */
       sr_send_packet(sr,sr_packet->buf,sr_packet->len,sr_packet->iface);
       sr_packet = destroy_sent_packet(sr_arpreq);
     }
@@ -233,7 +231,8 @@ void sr_handlepacket(struct sr_instance* sr,
         }
         else
         {
-        
+          Debug("Packet is TCP/UDP\n");
+          tcp_udp_handler(sr,packet,len,interface);
         }
       }
       else
